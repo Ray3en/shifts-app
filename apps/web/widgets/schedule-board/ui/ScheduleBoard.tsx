@@ -59,6 +59,7 @@ export default function ScheduleBoard() {
   const updateAssignmentMutation = useUpdateAssignment();
   const [templateMenuOpen, setTemplateMenuOpen] = useState(false);
   const [toast, setToast] = useState<Toast | null>(null);
+  const [pendingCells, setPendingCells] = useState<Set<string>>(new Set());
   const { register, handleSubmit, formState: { errors, isSubmitting } } = useForm<CustomInput>({
     resolver: zodResolver(customSchema), defaultValues: { startTime: "09:00", endTime: "17:00" },
   });
@@ -73,6 +74,18 @@ export default function ScheduleBoard() {
     return () => window.clearTimeout(timer);
   }, [toast]);
   const notify = (text: string, tone: Toast["tone"] = "success") => setToast({ text, tone });
+  const withPendingCells = async <T,>(keys: string[], action: () => Promise<T>): Promise<T> => {
+    setPendingCells((current) => new Set([...current, ...keys]));
+    try {
+      return await action();
+    } finally {
+      setPendingCells((current) => {
+        const next = new Set(current);
+        keys.forEach((key) => next.delete(key));
+        return next;
+      });
+    }
+  };
   const range = useMemo(() => {
     if (!cursor) return null;
     return getScheduleRange(cursor, view);
@@ -83,7 +96,7 @@ export default function ScheduleBoard() {
 
   const create = async (body: CreateAssignmentInput) => {
     try {
-      await createMutation.mutateAsync(body);
+      await withPendingCells(body.cells.map((cell) => scheduleCellKey(cell.employeeId, cell.date)), () => createMutation.mutateAsync(body));
       notify("Смена сохранена");
       clear();
     } catch {
@@ -97,8 +110,10 @@ export default function ScheduleBoard() {
     const occupied = cells.map((cell) => assignments.get(scheduleCellKey(cell.employeeId, cell.date))).filter((assignment): assignment is ShiftAssignment => Boolean(assignment));
     const empty = cells.filter((cell) => !assignments.has(scheduleCellKey(cell.employeeId, cell.date)));
     try {
-      await Promise.all(occupied.map((assignment) => applyTemplateMutation.mutateAsync({ id: assignment.id, templateId: template.id })));
-      if (empty.length) await createMutation.mutateAsync({ cells: empty, templateId: template.id });
+      await withPendingCells(cells.map((cell) => scheduleCellKey(cell.employeeId, cell.date)), async () => {
+        await Promise.all(occupied.map((assignment) => applyTemplateMutation.mutateAsync({ id: assignment.id, templateId: template.id })));
+        if (empty.length) await createMutation.mutateAsync({ cells: empty, templateId: template.id });
+      });
       clear();
       setTemplateMenuOpen(false);
       notify("Шаблон применён");
@@ -109,7 +124,7 @@ export default function ScheduleBoard() {
   const clickCell = (employeeId: string, date: string) => toggle(employeeId, date);
   const remove = async (assignment: ShiftAssignment) => {
     try {
-      await deleteMutation.mutateAsync(assignment.id);
+      await withPendingCells([scheduleCellKey(assignment.employeeId, assignment.date)], () => deleteMutation.mutateAsync(assignment.id));
       notify("Смена удалена");
     } catch {
       notify("Не удалось удалить смену", "error");
@@ -121,8 +136,10 @@ export default function ScheduleBoard() {
     const occupied = cells.map((cell) => assignments.get(scheduleCellKey(cell.employeeId, cell.date))).filter((assignment): assignment is ShiftAssignment => Boolean(assignment));
     const empty = cells.filter((cell) => !assignments.has(scheduleCellKey(cell.employeeId, cell.date)));
     try {
-      await Promise.all(occupied.map((assignment) => updateAssignmentMutation.mutateAsync({ id: assignment.id, ...values })));
-      if (empty.length) await createMutation.mutateAsync({ cells: empty, ...values });
+      await withPendingCells(cells.map((cell) => scheduleCellKey(cell.employeeId, cell.date)), async () => {
+        await Promise.all(occupied.map((assignment) => updateAssignmentMutation.mutateAsync({ id: assignment.id, ...values })));
+        if (empty.length) await createMutation.mutateAsync({ cells: empty, ...values });
+      });
       clear();
       notify("Своя смена применена");
     } catch {
@@ -138,9 +155,10 @@ export default function ScheduleBoard() {
     days: new Set(selectedList.map((cell) => cell.date)).size,
   };
   const clearSelectedAssignments = async () => {
-    const ids = selectedCells().map((cell) => assignments.get(scheduleCellKey(cell.employeeId, cell.date))?.id).filter((id): id is string => Boolean(id));
+    const cells = selectedCells();
+    const ids = cells.map((cell) => assignments.get(scheduleCellKey(cell.employeeId, cell.date))?.id).filter((id): id is string => Boolean(id));
     try {
-      await Promise.all(ids.map((id) => deleteMutation.mutateAsync(id)));
+      await withPendingCells(cells.map((cell) => scheduleCellKey(cell.employeeId, cell.date)), () => Promise.all(ids.map((id) => deleteMutation.mutateAsync(id))));
       clear();
       notify(ids.length ? "Выбранные смены удалены" : "В выбранных ячейках нет смен");
     } catch {
@@ -148,8 +166,10 @@ export default function ScheduleBoard() {
     }
   };
   const moveAssignedShift = async (assignmentId: string, employeeId: string, date: string) => {
+    const source = data?.assignments.find((assignment) => assignment.id === assignmentId);
+    const keys = [scheduleCellKey(employeeId, date), ...(source ? [scheduleCellKey(source.employeeId, source.date)] : [])];
     try {
-      await moveMutation.mutateAsync({ id: assignmentId, employeeId, date });
+      await withPendingCells(keys, () => moveMutation.mutateAsync({ id: assignmentId, employeeId, date }));
       notify("Смена перемещена");
     } catch {
       notify("Нельзя переместить смену в занятую ячейку", "error");
@@ -177,7 +197,7 @@ export default function ScheduleBoard() {
             <button className="flex items-center gap-1.5" type="button" onClick={clear}><Image src={xIcon} width={16} height={16} alt="" />Снять</button>
           </span>
         </div> : <div className="mb-5 flex shrink-0 flex-wrap items-end gap-2">
-          <SearchInput value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Поиск по ФИО" />
+          <SearchInput value={search} onChange={(event) => setSearch(event.target.value)} onClear={() => setSearch("")} placeholder="Поиск по ФИО" />
           <CalendarViewSwitch value={view} onChange={setView} />
           <DatePicker value={cursor ? toIsoDate(cursor) : ""} onChange={(value) => value && setCursor(new Date(`${value}T12:00:00`))} />
         </div>}
@@ -195,13 +215,16 @@ export default function ScheduleBoard() {
                   const key = scheduleCellKey(employee.id, day);
                   const assignment = assignments.get(key);
                   const isSelected = selected.has(key);
+                  const isPending = pendingCells.has(key);
                   const palette = assignment ? (isSelected ? { background: "#5b7dec", text: "#ffffff", accent: "#ffffff", border: "#5b7dec" } : getShiftPalette(assignment.templateName)) : null;
                   const duration = assignment ? getShiftDuration(assignment.startTime, assignment.endTime) : 0;
                   return (
                     <button
                       aria-label={`${employee.fullName}, ${day}${assignment ? `, смена ${formatShiftRange(assignment.startTime, assignment.endTime)}` : ", свободно"}`}
                       key={key}
-                      draggable={Boolean(assignment)}
+                      draggable={Boolean(assignment) && !isPending}
+                      disabled={isPending}
+                      aria-busy={isPending}
                       className={`relative mx-1 flex h-14 min-w-0 self-center items-center justify-center overflow-hidden rounded-lg text-left text-[10px] ${assignment ? "border border-transparent" : isSelected ? "border border-[#5b7dec] bg-[#e8edfc]" : "border border-dashed border-[#dfe1e7]"}`}
                       onDragStart={(event) => { if (assignment) { event.dataTransfer.setData("assignmentId", assignment.id); setRoundedDragPreview(event, (event.currentTarget.firstElementChild as HTMLElement | null) ?? event.currentTarget); } }}
                       onClick={() => clickCell(employee.id, day)} onDrop={(event) => { event.preventDefault(); if (assignment) return; const assignmentId = event.dataTransfer.getData("assignmentId"); if (assignmentId) { void moveAssignedShift(assignmentId, employee.id, day); return; } const template = data.templates.find((item) => item.id === event.dataTransfer.getData("templateId")); if (template) void assignTemplate(template, employee.id, day); }} onDragOver={(event) => { if (!assignment) event.preventDefault(); }}>{assignment && palette ?
@@ -214,6 +237,9 @@ export default function ScheduleBoard() {
                         </span> : isSelected ? <span className="grid h-full place-items-center">
                           <span className="grid size-5 place-items-center rounded-full bg-[#5b7dec]"><Image src={plusIcon} width={12} height={12} alt="" /></span>
                         </span> : null}
+                      {isPending ? <span className="absolute inset-0 z-10 grid place-items-center rounded-lg bg-white/60 backdrop-blur-[1px]" aria-label="Смена загружается">
+                        <span className="size-5 animate-spin rounded-full border-2 border-[#b9c8fa] border-t-[#5b7dec]" />
+                      </span> : null}
                     </button>
                   )
                 })}
