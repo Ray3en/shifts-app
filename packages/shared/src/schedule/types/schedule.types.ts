@@ -1,0 +1,11 @@
+import type { z } from "zod";
+import type { createAssignmentSchema, updateAssignmentSchema } from "../schemas/assignment-input.schema.js";
+import type { assignmentMutationResponseSchema } from "../schemas/assignment-response.schema.js";
+import type { scheduleQuerySchema } from "../schemas/schedule-query.schema.js";
+import type { scheduleResponseSchema } from "../schemas/schedule-response.schema.js";
+
+export type ScheduleQuery = z.infer<typeof scheduleQuerySchema>;
+export type ScheduleResponse = z.infer<typeof scheduleResponseSchema>;
+export type CreateAssignmentInput = z.infer<typeof createAssignmentSchema>;
+export type UpdateAssignmentInput = z.infer<typeof updateAssignmentSchema>;
+export type AssignmentMutationResponse = z.infer<typeof assignmentMutationResponseSchema>;

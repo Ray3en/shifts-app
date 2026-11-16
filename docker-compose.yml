@@ -1,0 +1,52 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-shifts}
+      POSTGRES_USER: ${POSTGRES_USER:-shifts}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-shifts}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "${POSTGRES_BIND_IP:-127.0.0.1}:${POSTGRES_PORT:-5432}:5432"
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    environment:
+      HOST: 0.0.0.0
+      PORT: ${API_CONTAINER_PORT:-3001}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-shifts}:${POSTGRES_PASSWORD:-shifts}@postgres:5432/${POSTGRES_DB:-shifts}
+      DB_SYNCHRONIZE: ${DB_SYNCHRONIZE:-true}
+      JWT_SECRET: ${JWT_SECRET:-local-development-secret-change-me}
+      ADMIN_LOGIN: ${ADMIN_LOGIN:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin}
+      WEB_ORIGIN: ${WEB_ORIGIN:-http://localhost:3000}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "${SERVER_IP:-0.0.0.0}:${API_PORT:-3001}:${API_CONTAINER_PORT:-3001}"
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    environment:
+      HOSTNAME: 0.0.0.0
+      PORT: ${WEB_CONTAINER_PORT:-3000}
+      INTERNAL_API_URL: http://api:${API_CONTAINER_PORT:-3001}
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+    depends_on:
+      - api
+    ports:
+      - "${SERVER_IP:-0.0.0.0}:${WEB_PORT:-3000}:${WEB_CONTAINER_PORT:-3000}"
+
+volumes:
+  postgres_data:

@@ -1,0 +1,12 @@
+@import "tailwindcss";
+
+@theme inline {
+  --color-app-background: #f3f4f8;
+}
+
+body {
+  margin: 0;
+  background: var(--color-app-background);
+  color: #16171a;
+  font-family: var(--font-inter), Arial, Helvetica, sans-serif;
+}
